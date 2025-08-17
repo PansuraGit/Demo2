@@ -47,6 +47,8 @@
             <artifactId>maven-jar-plugin</artifactId>
             <version>3.2.0</version>
             <configuration>
+                      <source>8</source>   <!-- Change to 8 or later -->
+                      <target>8</target>   <!-- Change to 8 or later -->
                 <archive>
                     <manifest>
                         <mainClass>com.example.YourMainClass</mainClass>
