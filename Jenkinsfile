@@ -1,85 +1,75 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    // Change these to your Docker Hub (or ECR) details
-    REGISTRY = 'docker.io'
-    IMAGE_NAME = 'your-dockerhub-username/java-static-demo'
-    DOCKERHUB_CREDS = 'dockerhub-creds' // Jenkins Credentials ID (Username/Password)
-  }
-
-  options {
-    timestamps()
-    ansiColor('xterm')
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+    environment {
+        GIT_REPO = "https://github.com/PansuraGit/Demo2.git"
+        BRANCH = "master"
+        DOCKER_IMAGE = "pansura/java-app"
+        SONARQUBE_SERVER = "sonarqube-server"   // Configure in Jenkins -> Manage Jenkins -> Configure System
+        SONARQUBE_CREDENTIALS = "sonarqube-token" // Jenkins credential ID
+        DOCKER_CREDENTIALS = "dockerhub-credentials" // Jenkins credential ID
     }
 
-    stage('Build (Maven)') {
-      steps {
-        sh 'mvn -B -DskipTests package'
-      }
-      post {
-        success { archiveArtifacts artifacts: 'target/*.jar', fingerprint: true }
-      }
-    }
-
-    stage('Unit Tests') {
-      steps {
-        sh 'mvn -B test'
-      }
-      post {
-        always {
-          junit 'target/surefire-reports/*.xml'
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
         }
-      }
-    }
 
-    stage('Build Docker Image') {
-      steps {
-        script {
-          def tag = "${env.BUILD_NUMBER}"
-          sh "docker build -t ${IMAGE_NAME}:${tag} ."
-          sh "docker tag ${IMAGE_NAME}:${tag} ${IMAGE_NAME}:latest"
+        stage('Checkout Code') {
+            steps {
+                git branch: "${BRANCH}", url: "${GIT_REPO}"
+            }
         }
-      }
-    }
 
-    stage('Push Image') {
-      steps {
-        script {
-          withCredentials([usernamePassword(credentialsId: DOCKERHUB_CREDS, passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-            sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-            sh "docker push ${IMAGE_NAME}:${BUILD_NUMBER}"
-            sh "docker push ${IMAGE_NAME}:latest"
-          }
+        stage('Build with Maven') {
+            steps {
+                sh 'mvn clean install -DskipTests'
+            }
         }
-      }
-    }
 
-    stage('Deploy (Optional)') {
-      when { expression { return params.DEPLOY_TO_LOCAL == true } }
-      steps {
-        sh '''
-          docker rm -f java-static-demo || true
-          docker run -d --name java-static-demo -p 8080:8080 ${IMAGE_NAME}:latest
-        '''
-      }
-    }
-  }
+        stage('Docker Build') {
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} ."
+                }
+            }
+        }
 
-  parameters {
-    booleanParam(name: 'DEPLOY_TO_LOCAL', defaultValue: false, description: 'Run container on the Jenkins agent after build')
-  }
+        stage('Trivy Scan') {
+            steps {
+                sh """
+                  trivy image --exit-code 0 --severity LOW,MEDIUM,HIGH,CRITICAL ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                  trivy image --exit-code 1 --severity CRITICAL ${DOCKER_IMAGE}:${BUILD_NUMBER} || true
+                """
+            }
+        }
 
-  post {
-    always {
-      cleanWs()
+        stage('Docker Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                        sh """
+                          echo "$PASS" | docker login -u "$USER" --password-stdin
+                          docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                script {
+                    sh """
+                      docker stop java-app || true
+                      docker rm java-app || true
+                      docker run -d --name java-app -p 3000:8080 ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                    """
+                }
+            }
+        }
     }
-  }
 }
+
